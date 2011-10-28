@@ -385,11 +385,13 @@ from miro.feed import (Feed, FeedImpl, RSSFeedImpl, SavedSearchFeedImpl,
 from miro.feed import (SearchFeedImpl, DirectoryWatchFeedImpl,
                        DirectoryFeedImpl, SearchDownloadsFeedImpl)
 from miro.feed import ManualFeedImpl
+from miro.filetags import MutagenItemData
 from miro.folder import (HideableTab, ChannelFolder, PlaylistFolder,
                          PlaylistFolderItemMap)
 from miro.guide import ChannelGuide
 from miro.item import Item, FileItem
 from miro.iconcache import IconCache
+from miro.metadata import ItemDataStatus
 from miro.playlist import SavedPlaylist, PlaylistItemMap
 from miro.tabs import TabOrder
 from miro.theme import ThemeHistory
@@ -447,7 +449,6 @@ class ItemSchema(MultiClassObjectSchema):
         ('isContainerItem', SchemaBool(noneOk=True)),
         ('releaseDateObj', SchemaDateTime()),
         ('eligibleForAutoDownload', SchemaBool()),
-        ('duration', SchemaInt(noneOk=True)),
         ('screenshot', SchemaFilename(noneOk=True)),
         ('resumeTime', SchemaInt()),
         ('channelTitle', SchemaString(noneOk=True)),
@@ -470,28 +471,11 @@ class ItemSchema(MultiClassObjectSchema):
         ('offsetPath', SchemaFilename(noneOk=True)),
         ('play_count', SchemaInt()),
         ('skip_count', SchemaInt()),
-        ('cover_art', SchemaFilename(noneOk=True)),
-        ('mdp_state', SchemaInt(noneOk=True)),
         # metadata:
-        ('metadata_version', SchemaInt()),
         ('title', SchemaString(noneOk=True)),
-        ('title_tag', SchemaString(noneOk=True)),
-        ('description', SchemaString(noneOk=True)),
-        ('album', SchemaString(noneOk=True)),
-        ('album_artist', SchemaString(noneOk=True)),
-        ('artist', SchemaString(noneOk=True)),
-        ('track', SchemaInt(noneOk=True)),
-        ('album_tracks', SchemaInt(noneOk=True)),
-        ('year', SchemaInt(noneOk=True)),
-        ('genre', SchemaString(noneOk=True)),
-        ('rating', SchemaInt(noneOk=True)),
         ('file_type', SchemaString(noneOk=True)),
         ('has_drm', SchemaBool(noneOk=True)),
-        ('show', SchemaString(noneOk=True)),
-        ('episode_id', SchemaString(noneOk=True)),
-        ('episode_number', SchemaInt(noneOk=True)),
-        ('season_number', SchemaInt(noneOk=True)),
-        ('kind', SchemaString(noneOk=True)),
+        ('duration', SchemaInt(noneOk=True)),
     ]
 
     indexes = (
@@ -501,6 +485,37 @@ class ItemSchema(MultiClassObjectSchema):
             ('item_downloader', ('downloader_id',)),
             ('item_feed_downloader', ('feed_id', 'downloader_id',)),
             ('item_file_type', ('file_type',)),
+    )
+
+class MutagenItemDataSchema(DDBObjectSchema):
+    klass = MutagenItemData
+    table_name = 'mutagen_item_data'
+    fields = DDBObjectSchema.fields + [
+        ('item_id', SchemaInt()),
+        ('title', SchemaString(noneOk=True)),
+        ('album', SchemaString(noneOk=True)),
+        ('artist', SchemaString(noneOk=True)),
+        ('album_artist', SchemaString(noneOk=True)),
+        ('track', SchemaInt(noneOk=True)),
+        ('year', SchemaInt(noneOk=True)),
+        ('genre', SchemaString(noneOk=True)),
+        ('has_drm', SchemaBool(noneOk=True)),
+        ('cover_art', SchemaFilename(noneOk=True)),
+
+        ('file_type', SchemaInt(noneOk=True)),
+        ('duration', SchemaInt(noneOk=True)),
+
+        #('description', SchemaString(noneOk=True)),
+        #('album_tracks', SchemaInt(noneOk=True)),
+        #('rating', SchemaInt(noneOk=True)),
+        #('show', SchemaString(noneOk=True)),
+        #('episode_id', SchemaString(noneOk=True)),
+        #('episode_number', SchemaInt(noneOk=True)),
+        #('season_number', SchemaInt(noneOk=True)),
+        #('kind', SchemaString(noneOk=True)),
+    ]
+
+    indexes = (
     )
 
 class FeedSchema(DDBObjectSchema):
@@ -804,8 +819,24 @@ class ViewStateSchema(DDBObjectSchema):
     def handle_malformed_column_widths(value):
         return None
 
+class ItemDataStatusSchema(DDBObjectSchema):
+    klass = ItemDataStatus
+    table_name = 'item_data_status'
+    fields = DDBObjectSchema.fields + [
+        ('item_id', SchemaInt()),
+        ('mutagen_queued', SchemaBool()),
+        ('moviedata_queued', SchemaBool()),
+        ('echonest_queued', SchemaBool()),
+    ]
 
-VERSION = 164
+    indexes = (
+        ('item_data_id_key', ('item_id',)),
+        ('item_data_mutagen_key', ('mutagen_queued',)),
+        ('item_data_moviedata_key', ('moviedata_queued',)),
+        ('item_data_echonest_key', ('echonest_queued',)),
+    )
+
+VERSION = 165
 
 object_schemas = [
     IconCacheSchema, ItemSchema, FeedSchema,
@@ -817,5 +848,5 @@ object_schemas = [
     PlaylistSchema, HideableTabSchema, ChannelFolderSchema, PlaylistFolderSchema,
     PlaylistItemMapSchema, PlaylistFolderItemMapSchema,
     TabOrderSchema, ThemeHistorySchema, DisplayStateSchema, GlobalStateSchema,
-    DBLogEntrySchema, ViewStateSchema,
+    DBLogEntrySchema, ViewStateSchema, MutagenItemDataSchema, ItemDataStatusSchema
 ]

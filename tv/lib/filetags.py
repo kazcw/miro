@@ -37,6 +37,7 @@ import mutagen
 from miro import coverart
 from miro import filetypes
 from miro import app
+from miro.database import DDBObject
 
 # increment this after adding to TAGS_FOR_ATTRIBUTE or changing read_metadata() in a way
 # that will increase data identified (will not change values already extracted)
@@ -354,3 +355,53 @@ def _parse_mutagen(filename, muta, test):
             cover_art = _make_cover_art_file(filename, image_data)
         del data['cover_art']
     return mediatype, duration, data, cover_art
+
+class MutagenItemData(DDBObject):
+    def setup_new(self, item_id, title, album, artist, file_type, duration,
+            album_artist, track, year, genre, drm):
+        self.item_id = item_id
+        self.title = title
+        self.album = album
+        self.artist = artist
+        self.file_type = file_type
+        self.duration = duration
+        self.album_artist = album_artist
+        self.artist = artist
+        self.track = track
+        self.year = year
+        self.genre = genre
+        self.has_drm = drm
+        self.cover_art = cover_art
+
+    def get_info_map(self):
+        return dict(
+            title = self.title,
+            album = self.album,
+            artist = self.artist,
+        )
+
+class MutagenMetadataExtractor(object):
+    """Store of metadata for local files"""
+    def has_item_metadata(self, item_id):
+        return MutagenItemData.make_view('item_id = ?', (item_id,)).count() > 0
+
+    def get_item_metadata(self, item_id):
+        item_data = MutagenItemData.make_view('item_id = ?', (item_id,)).get_singleton()
+        return item_data.get_info_map()
+
+    def process_downloaded_item(self, item_id, path):
+        mediatype, duration, metadata, cover_art = read_metadata(path)
+        MutagenItemData(
+            item_id,
+            file_type = mediatype,
+            duration = duration,
+            cover_art = cover_art,
+            album = metadata.get('album', None),
+            album_artist = metadata.get('album_artist', None),
+            artist = metadata.get('artist', None),
+            title = metadata.get('title', None),
+            track = metadata.get('track', None),
+            year = metadata.get('year', None),
+            genre = metadata.get('genre', None),
+            drm = metadata.get('drm', False)
+        )

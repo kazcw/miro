@@ -34,11 +34,15 @@ frontend cares about these and the backend doesn't.
 import logging
 import fileutil
 import os.path
+import threading
 
 from miro.util import returns_unicode
 from miro import coverart
 from miro import filetags
 from miro import filetypes
+from miro import app
+from miro.database import DDBObject
+from miro.plat.utils import thread_body
 
 class Source(object):
     """Object with readable metadata properties."""
@@ -73,26 +77,25 @@ class Source(object):
 
     def setup_new(self):
         self.title = u""
-        self.title_tag = None
-        self.description = u""
-        self.album = None
-        self.album_artist = None
-        self.artist = None
-        self.track = None
-        self.album_tracks = None
-        self.year = None
-        self.genre = None
-        self.rating = None
-        self.cover_art = None
         self.has_drm = None
         self.file_type = None
-        self.show = None
-        self.episode_id = None
-        self.episode_number = None
-        self.season_number = None
-        self.kind = None
-        self.metadata_version = 0
-        self.mdp_state = None # moviedata.State.UNSEEN
+        #self.title_tag = None
+        #self.description = u""
+        #self.album = None
+        #self.album_artist = None
+        #self.artist = None
+        #self.track = None
+        #self.album_tracks = None
+        #self.year = None
+        #self.genre = None
+        #self.rating = None
+        #self.cover_art = None
+        #self.show = None
+        #self.episode_id = None
+        #self.episode_number = None
+        #self.season_number = None
+        #self.kind = None
+        self.metadata_status = ItemDataStatus(self.id)
 
     @property
     def media_type_checked(self):
@@ -265,3 +268,57 @@ class Store(Source):
         metadata_version = set_metadata_version,
         mdp_state = set_mdp_state,
     )
+
+class ItemDataStatus(DDBObject):
+    """Table to keep track of what items need to be examined by extractors.
+    
+    When an item gets a file attached to it (or is created with a file),
+    X_queued is set for each extractor X. Each extractor is run in order of
+    priority, and any extractor that successfully makes a lower-priority
+    extractor unnecessary will unset the _queued flag for that extractor.
+    """
+    def setup_new(self, item_id):
+        self.item_id = item_id
+        self.mutagen_queued = False
+        self.moviedata_queued = False
+        self.echonest_queued = False
+
+    def mark_for_extraction(self):
+        self.mutagen_queued = True
+        self.moviedata_queued = True
+        self.echonest_queued = True
+        app.metadata_manager.process_downloaded_item()
+
+class MetadataManager(object):
+    def __init__(self):
+        self.thread = None
+        self.extractors = []
+
+    def register_provider(self, provider, priority):
+        self.extractors = sorted(self.extractors + [provider], lambda x: x.priority)
+
+    def get_provider(self, name):
+        raise NotImplementedError
+
+    def process_downloaded_item(self):
+        """Add the item to the processing thread's queue"""
+        # this actually doesn't need to do anything but wake up the thread
+
+    def start_processing_thread(self):
+        if self.thread is not None:
+            logging.warn("MetadataManager already started!")
+            return
+        self.thread = threading.Thread(name='Metadata Thread',
+                                       target=thread_body,
+                                       args=[self._thread_loop])
+        self.thread.setDaemon(True)
+        self.thread.start()
+
+    def stop_processing_thread(self):
+        pass
+
+    def _thread_loop(self):
+        pass
+        #
+
+app.metadata_manager = MetadataManager()

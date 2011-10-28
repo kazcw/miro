@@ -496,41 +496,6 @@ class Item(DDBObject, iconcache.IconCacheOwnerMixin, metadata.Store):
                 joins={'remote_downloader AS rd': 'item.downloader_id=rd.id'})
 
     @classmethod
-    def incomplete_mdp_view(cls, limit=10):
-        """Return up to limit local items that have not yet been examined with
-        MDP; a file is considered examined even if we have decided to skip it.
-
-        NB. don't change this without also changing in_incomplete_mdp_view!
-        """
-        return cls.make_view("((is_file_item AND NOT deleted) OR "
-                "(rd.state in ('finished', 'uploading', 'uploading-paused'))) "
-                "AND NOT isContainerItem " # match CMF short-circuit, just in case
-                "AND mdp_state IS NULL", # State.UNSEEN
-                joins={'remote_downloader AS rd': 'item.downloader_id=rd.id'},
-                limit=limit)
-
-    @property
-    def in_incomplete_mdp_view(self):
-        """This is the python version of the SQL query in incomplete_mdp_view,
-        to be used in situations where e.g. we need to assert that an item is no
-        longer eligible for the view - where actually querying the entire view
-        would be unreasonable.
-
-        NB. don't change this without also changing incomplete_mdp_view!
-        """
-        if not self.id_exists():
-            return False
-        if self.isContainerItem:
-            return False
-        # FIXME: if possible we should use the actual incomplete_mdp_view with
-        # an id=self.id constraint, but I don't see a straightforward way to do
-        # that
-        valid_file_item = self.is_file_item and not self.deleted
-        downloaded = self.downloader_state in (
-                'finished', 'uploading', 'uploading-paused')
-        return self.mdp_state is None and (valid_file_item or downloaded)
-
-    @classmethod
     def unique_others_view(cls):
         return cls.make_view("item.file_type='other' AND "
                 "((is_file_item AND NOT deleted) OR "
@@ -777,7 +742,6 @@ class Item(DDBObject, iconcache.IconCacheOwnerMixin, metadata.Store):
         self.set_downloader(downloader.lookup_downloader(self.get_url()))
         if self.has_downloader() and self.downloader.is_finished():
             self.set_filename(self.downloader.get_filename())
-            self.check_media_file()
 
     getSelected, setSelected = make_simple_get_set(
         u'selected', change_needs_save=False)
@@ -868,6 +832,7 @@ class Item(DDBObject, iconcache.IconCacheOwnerMixin, metadata.Store):
 
     def set_filename(self, filename):
         self.filename = filename
+        self.metadata_status.mark_for_extraction()
 
     def matches_search(self, search_string):
         if search_string is None or search_string == '':
@@ -1067,7 +1032,6 @@ class Item(DDBObject, iconcache.IconCacheOwnerMixin, metadata.Store):
             self.expired = True
             self.seen = self.keep = self.pendingManualDL = False
             self.filename = None
-            self.mdp_state = moviedata.State.UNSEEN
             self.file_type = self.watchedTime = self.lastWatched = None
             self.duration = None
             self.isContainerItem = None
@@ -1791,79 +1755,12 @@ class Item(DDBObject, iconcache.IconCacheOwnerMixin, metadata.Store):
         self.split_item()
         self.signal_change()
         self._replace_file_items()
-        self.check_media_file()
         signals.system.download_complete(self)
 
         for other in Item.make_view('downloader_id IS NULL AND url=?',
                 (self.url,)):
             other.set_downloader(self.downloader)
         self.recalc_feed_counts()
-
-    def check_media_file(self):
-        """Begin metadata extraction for this item; runs mutagen synchonously,
-        if applicable, and then adds the item to mdp's queue.
-        """
-        if self.isContainerItem:
-            self.file_type = u'other'
-            self.signal_change()
-            return # this is OK because incomplete_mdp_view knows about it
-        # NOTE: it is very important (#7993) that there is no way to leave this
-        # method without either:
-        # - calling moviedata.movie_data_updater.request_update(self)
-        # - calling _handle_invalid_media_file
-        try:
-            self._check_media_file()
-        except IOError, e:
-            # shouldn't generally happen, but probably something we have no
-            # control over; likely another process has moved or deleted our file
-            logging.warn("check_media_file failed: %s", e)
-            self._handle_invalid_media_file()
-        except CheckMediaError, e:
-            # filename is None - this should never happen
-            app.controller.failed_soft("check_media_file", str(e), True)
-            self._handle_invalid_media_file()
-        else:
-            moviedata.movie_data_updater.request_update(self)
-            if self.file_type is None:
-                # if this is not overridden by movie_data_updater,
-                # neither mutagen nor MDP could identify it
-                self.file_type = u'other'
-            self.signal_change()
-
-    def _handle_invalid_media_file(self):
-        """Failed to process a file in check_media_file; when this happens we:
-        - inform the metadata_progress_updater that we're done with the item
-        - make sure we don't try to process it again
-        - check whether the file no longer exists
-        """
-        # call path_processed since the movie data program won't run on us
-        path = self.get_filename()
-        if path is not None:
-            app.metadata_progress_updater.path_processed(path)
-        # Set our state to SKIPPED so we don't request another update.
-        self.mdp_state = moviedata.State.SKIPPED
-        self.file_type = u'other'
-        self.signal_change()
-        # The file may no longer be around.  Call check_delete() in an
-        # idle callback to handle this.  We don't want to call
-        # check_delete() now because it's not safe if we're called inside
-        # setup_new().  See #17344
-        _deleted_file_checker.schedule_check(self)
-
-    def _check_media_file(self):
-        """Does the work for check_media_file()
-
-        :raises: CheckMediaError if we aren't able to check it
-        """
-        # NOTE: it is very important (#7993) that there is no way to leave this
-        # method without either:
-        # - calling moviedata.movie_data_updater.request_update(self)
-        # - changing this item so that not self.in_incomplete_mdp_view
-        filename = self.get_filename()
-        if filename is None:
-            raise CheckMediaError("item has no filename")
-        self.file_type = filetypes.item_file_type_for_filename(filename)
-        self.read_metadata()
 
     def on_downloader_migrated(self, old_filename, new_filename):
         self.set_filename(new_filename)
@@ -2057,8 +1954,6 @@ class FileItem(Item):
             # not a container item.  Note that the opposite isn't true in the
             # case where we are a directory with only 1 file inside.
             self.isContainerItem = False
-        if not self.deleted:
-            self.check_media_file()
         self.split_item()
 
     # FileItem downloaders are always None
@@ -2154,13 +2049,11 @@ class FileItem(Item):
         self.parent_id = None
         self.feed_id = models.Feed.get_manual_feed().id
         self.deleted = True
-        self.mdp_state = moviedata.State.UNSEEN
         self.signal_change()
 
     def make_undeleted(self):
         self.deleted = False
-        self.mdp_state = moviedata.State.UNSEEN
-        self.check_media_file()
+#        self.check_media_file()
         self.signal_change()
 
     def delete_files(self):
@@ -2274,40 +2167,6 @@ def filename_to_title(filename):
 
 def fp_values_for_file(filename, title=None, description=None):
     return FileFeedParserValues(filename, title, description)
-
-def update_incomplete_movie_data():
-    IncompleteMovieDataUpdator()
-    # this will stay around because it connects to the movie data updater's
-    # signal.  Once it disconnects from the signal, we clean it up
-
-class IncompleteMovieDataUpdator(object):
-    """Finds local Items that have not been examined by MDP, and queues them.
-    """
-    BATCH_SIZE = 10
-    def __init__(self):
-        self.done = False
-        self.handle = moviedata.movie_data_updater.connect('queue-empty',
-                self.on_queue_empty)
-        self.do_some_updates()
-
-    def do_some_updates(self):
-        """Update some incomplete files, or set done=True if there are none.
-
-        Mutagen runs as part of the item creation process, so we need only check
-        whether MDP has examined a file here.
-        """
-        items_queued = 0
-        for item in Item.incomplete_mdp_view(limit=self.BATCH_SIZE):
-            item.check_media_file()
-            items_queued += 1
-        self.done = items_queued < self.BATCH_SIZE
-
-    def on_queue_empty(self, movie_data_updator):
-        if self.done:
-            movie_data_updator.disconnect(self.handle)
-        else:
-            eventloop.add_idle(self.do_some_updates,
-                    'update incomplete movie data')
 
 class DeletedFileChecker(object):
     """Utility class that manages calling Item.check_deleted().
@@ -2435,8 +2294,8 @@ class DeviceItem(metadata.Store):
             # bother continuing with other FS operations or starting moviedata
             logging.debug('error reading %s', self.id, exc_info=True)
         else:
-            if self.mdp_state is None: # haven't run MDP yet
-                moviedata.movie_data_updater.request_update(self)
+            # TODO queue metadata extraction
+            pass
         self.__initialized = True
 
     @staticmethod
