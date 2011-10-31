@@ -414,11 +414,12 @@ def on_frontend_started():
     already up and running.
     """
     logging.info("Starting auto downloader...")
+    # XXX testing: start extracting right away
+    app.metadata_manager.start_processing_thread()
+    yield None
     autodler.start_downloader()
     yield None
     feed.expire_items()
-    yield None
-    moviedata.movie_data_updater.start_thread()
     yield None
     commandline.startup()
     yield None
@@ -432,8 +433,8 @@ def on_frontend_started():
     eventloop.add_timeout(20, item.start_deleted_checker,
             "start checking deleted items")
     eventloop.add_timeout(30, feed.start_updates, "start feed updates")
-    eventloop.add_timeout(60, item.update_incomplete_movie_data,
-            "update movie data")
+#    eventloop.add_timeout(60, app.metadata_manager.start_processing_thread,
+#            "update metadata")
     eventloop.add_timeout(90, clear_icon_cache_orphans, "clear orphans")
 
 def setup_global_feeds():

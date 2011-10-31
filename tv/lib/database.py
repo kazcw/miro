@@ -208,6 +208,9 @@ class View(object):
     def count(self):
         return self._query_count()
 
+    def __len__(self):
+        return self._query_count()
+
     def get_singleton(self):
         results = list(self)
         if len(results) == 1:

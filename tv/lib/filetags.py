@@ -37,6 +37,8 @@ import mutagen
 from miro import coverart
 from miro import filetypes
 from miro import app
+from miro import metadata
+from miro.database import DDBObject
 
 # increment this after adding to TAGS_FOR_ATTRIBUTE or changing read_metadata() in a way
 # that will increase data identified (will not change values already extracted)
@@ -354,3 +356,27 @@ def _parse_mutagen(filename, muta, test):
             cover_art = _make_cover_art_file(filename, image_data)
         del data['cover_art']
     return mediatype, duration, data, cover_art
+
+class MutagenExtractor(metadata.Extractor):
+    NAME = 'mutagen'
+    PRIORITY = 2000
+    IDENTIFIES_DRM = False
+
+    def process_item(self, item_):
+        result = read_metadata(item_.filename)
+        if not result:
+            # fail
+            return
+        # rearrange the data a bit (_parse_mutagen should be updated to match
+        # the new structure)
+        mediatype, duration, data, cover_art = result
+        data['cover_art'] = cover_art
+        has_drm = data.get(has_drm, False)
+        # create the block
+        metadata_ = metadata.ItemMetadata(item_.id, self.__class__.PRIORITY, self.NAME)
+        metadata_.duration = duration
+        metadata_.file_type = None # based on mediatype
+        metadata_.has_drm = has_drm
+        metadata_.metadata = data
+
+app.metadata_manager.register_provider(MutagenExtractor)

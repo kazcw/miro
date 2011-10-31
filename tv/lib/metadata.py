@@ -34,11 +34,15 @@ frontend cares about these and the backend doesn't.
 import logging
 import fileutil
 import os.path
+import threading
+from contextlib import contextmanager
 
-from miro.util import returns_unicode
+from miro.util import returns_unicode, returns_filename
 from miro import coverart
-from miro import filetags
 from miro import filetypes
+from miro import app
+from miro.database import DDBObject
+from miro.plat.utils import thread_body
 
 class Source(object):
     """Object with readable metadata properties."""
@@ -67,32 +71,42 @@ class Source(object):
             episode_number = self.episode_number,
             season_number = self.season_number,
             kind = self.kind,
-            metadata_version = self.metadata_version,
-            mdp_state = self.mdp_state,
         )
 
     def setup_new(self):
-        self.title = u""
-        self.title_tag = None
-        self.description = u""
-        self.album = None
-        self.album_artist = None
-        self.artist = None
-        self.track = None
-        self.album_tracks = None
-        self.year = None
-        self.genre = None
-        self.rating = None
-        self.cover_art = None
-        self.has_drm = None
-        self.file_type = None
-        self.show = None
-        self.episode_id = None
-        self.episode_number = None
-        self.season_number = None
-        self.kind = None
-        self.metadata_version = 0
-        self.mdp_state = None # moviedata.State.UNSEEN
+        self.set_primary_metadata(None)
+        self.calc_composite_metadata()
+
+    def set_primary_metadata(self, data=None):
+        """Apply the single-source (frontend) data from a given source"""
+        if data is None:
+            data = {}
+        self.title = data.get('title', u"")
+        self.description = data.get('description', u"")
+        self.album = data.get('album', None)
+        self.album_artist = data.get('album_artist', None)
+        self.artist = data.get('artist', None)
+        self.track = data.get('track', None)
+        self.album_tracks = data.get('album_tracks', None)
+        self.year = data.get('year', None)
+        self.genre = data.get('genre', None)
+        self.rating = data.get('rating', None)
+        self.cover_art = data.get('cover_art', None)
+        self.show = data.get('show', None)
+        self.episode_id = data.get('episode_id', None)
+        self.episode_number = data.get('episode_number', None)
+        self.season_number = data.get('season_number', None)
+        self.kind = data.get('kind', None)
+        # TODO: save base data for special properties
+        self.signal_change()
+
+    def calc_composite_metadata(self):
+        # set duration
+        # set filetype
+        # set has_drm
+        self.file_type = 'audio'
+        self.duration = 100
+        self.has_drm = False
 
     @property
     def media_type_checked(self):
@@ -112,46 +126,16 @@ class Source(object):
     def get_description(self):
         return self.description
 
-    def read_metadata(self):
-        # always mark the file as seen
-        self.metadata_version = filetags.METADATA_VERSION
-
-        if self.file_type == u'other':
-            return
-
-        path = self.get_filename()
-        rv = filetags.read_metadata(path)
-        if not rv:
-            return
-
-        mediatype, duration, metadata, cover_art = rv
-        self.file_type = mediatype
-        # FIXME: duration isn't actually a attribute of metadata.Source.
-        # This currently works because Item and Device item are the only
-        # classes that call read_metadata(), and they both define duration
-        # the same way.
-        #
-        # But this is pretty fragile.  We should probably refactor
-        # duration to be an attribute of metadata.Source.
-        self.duration = duration
-        self.cover_art = cover_art
-        self.album = metadata.get('album', None)
-        self.album_artist = metadata.get('album_artist', None)
-        self.artist = metadata.get('artist', None)
-        self.title_tag = metadata.get('title', None)
-        self.track = metadata.get('track', None)
-        self.year = metadata.get('year', None)
-        self.genre = metadata.get('genre', None)
-        self.has_drm = metadata.get('drm', False)
-
-        # 16346#c26 - run MDP for all OGG files in case they're videos
-        extension = os.path.splitext(path)[1].lower()
-        # oga is the only ogg-ish extension guaranteed to be audio
-        if extension.startswith('.og') and extension != '.oga':
-            # None because we need is_playable to be False until MDP has
-            # determined the real file type, or newly-downloaded videos will
-            # always play as audio; MDP always looks at file_type=None files
-            self.file_type = None
+    @returns_filename
+    def get_thumbnail(self):
+        # XXX TODO: probably just make thumbnail a metadata property
+        info = self.get_iteminfo_metadata()
+        if 'cover_art' in info:
+            path = info['cover_art']
+            return resources.path(fileutil.expand_filename(path))
+#        elif info['screenshot']:
+#            path = info['screenshot']
+#            return resources.path(fileutil.expand_filename(path))
 
 def metadata_setter(attribute, type_=None):
     def set_metadata(self, value, _bulk=False):
@@ -265,3 +249,141 @@ class Store(Source):
         metadata_version = set_metadata_version,
         mdp_state = set_mdp_state,
     )
+
+class ItemMetadataStatus(DDBObject):
+    """State of metadata of one Item.
+
+    An item will have no ItemMetadataStatus if it is not queued and has not been
+    examined either (e.g. if it doesn't have an associated file (yet)). An
+    ItemMetadataStatus should be created when the item becomes examinable;
+    creating the Status object puts the item into the appropriate extractor
+    queues.
+    """
+    def setup_new(self, item_id):
+        self.item_id = item_id
+        # cross-extractor info: ``what info would be useful at this point?''
+        self.best_successful_extractor_priority = None
+        self.drm_checked = False
+        # per-extractor status: ``what have we already tried?''
+        self.echonest_examined = False
+        self.mutagen_examined = False
+        self.mdp_examined = False
+
+class Extractor(object):
+    """Base of all metadata-finders"""
+    NAME = NotImplemented
+    PRIORITY = NotImplemented
+    IDENTIFIES_DRM = NotImplemented
+
+    @classmethod
+    def queue_view(cls):
+        drm_clause = " OR (NOT drm_checked)" if cls.IDENTIFIES_DRM else ""
+        return ItemMetadataStatus.make_view("(NOT %s_examined) AND "
+                "((NOT best_successful_extractor_priority > ?) %s)" %
+                (cls.NAME, drm_clause),
+                (cls.PRIORITY,))
+
+    def process_item(self, item_):
+        raise NotImplementedError
+
+    def mark_processed(self, item_, metadata_succcess):
+        status, = ItemMetadataStatus.make_view('item_id = ?', (item_.id,))
+        setattr(status, '%s_examined' % (self.__class__.NAME,), True)
+        if self.__class__.IDENTIFIES_DRM:
+            status.drm_checked = True
+        if metadata_succcess and status.best_successful_extractor_priority:
+            new_best = max(status.best_successful_extractor_priority,
+                    self.__class__.PRIORITY)
+            status.best_successful_extractor_priority = new_best
+
+class ItemMetadata(DDBObject):
+    """Metadata describing one item, from one source"""
+    def setup_new(self, item_id, extractor_priority, extractor_id):
+        # required properties: identify the block
+        self.item_id = item_id
+        self.extractor_priority = extractor_priority
+        self.extractor_name = extractor_name
+        # ``package-deal'' frontend data
+        self.metadata = {}
+        # backend-ish stuff that tends to be combined between different
+        # providers
+        self.duration = None
+        self.has_drm = None
+        self.file_type = None
+
+    @classmethod
+    def info_view(cls, item_id):
+        """Return a view that always corresponds to the highest-ranking
+        available data for an item.
+        """
+        return cls.make_view(
+                "item_id=?", values=(item_id,),
+                order_by='provider_rank', limit='1')
+
+class MetadataManager(object):
+    def __init__(self):
+        self.thread = None
+        self.should_shutdown = False
+        self.extractors = []
+
+    def register_provider(self, provider):
+        self.extractors = sorted(self.extractors + [provider],
+                lambda x: -x.PRIORITY)
+
+    def get_provider(self, name):
+        raise NotImplementedError
+
+    def process_downloaded_item(self, item_id):
+        """Queue the item for extraction by all applicable extractors."""
+        if ItemMetadataStatus.make_view("item_id=?", (item_id,)):
+            # item has already been in the queue before
+            return
+        # begin tracking the item's metadata status (this enqueues the item)
+        ItemMetadataStatus(item_id)
+        # wake up the processor, if it was sleeping
+        self.start_processing_thread()
+
+    def start_processing_thread(self):
+        """Launch the processing thread."""
+        if self.thread is not None:
+            # nothing to do
+            return
+        self.should_shutdown = False
+        self.thread = threading.Thread(name='Metadata Thread',
+                                       target=thread_body,
+                                       args=[self._thread_loop])
+        self.thread.setDaemon(True)
+        self.thread.start()
+
+    def stop_processing_thread(self):
+        """The processing thread, if running, will exit when it finishes the
+        current item.
+        """
+        self.should_shutdown = True
+        self.thread = None
+
+    @contextmanager
+    def looping(self):
+        """Simple contextmanager to ensure that whatever happens in a
+        thread_loop, we signal begin/end properly.
+        """
+        self.emit('begin-loop')
+        try:
+            yield
+        finally:
+            self.emit('end-loop')
+
+    def _thread_loop(self):
+        """Examine items with any appropriate extractors, until there are none
+        left or self.should_shutdown is set.
+        """
+        for extractor in self.extractors:
+            for item_ in extractor.__class__.queue_view():
+                if self.should_shutdown:
+                    self.thread = None
+                    return
+                with self.looping:
+                    metadata_succcess = extractor.process_item(item_)
+                    extractor.mark_processed(item_, metadata_succcess)
+
+app.metadata_manager = MetadataManager()

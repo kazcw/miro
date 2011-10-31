@@ -390,6 +390,7 @@ from miro.folder import (HideableTab, ChannelFolder, PlaylistFolder,
 from miro.guide import ChannelGuide
 from miro.item import Item, FileItem
 from miro.iconcache import IconCache
+from miro.metadata import ItemMetadata, ItemMetadataStatus
 from miro.playlist import SavedPlaylist, PlaylistItemMap
 from miro.tabs import TabOrder
 from miro.theme import ThemeHistory
@@ -471,11 +472,8 @@ class ItemSchema(MultiClassObjectSchema):
         ('play_count', SchemaInt()),
         ('skip_count', SchemaInt()),
         ('cover_art', SchemaFilename(noneOk=True)),
-        ('mdp_state', SchemaInt(noneOk=True)),
         # metadata:
-        ('metadata_version', SchemaInt()),
         ('title', SchemaString(noneOk=True)),
-        ('title_tag', SchemaString(noneOk=True)),
         ('description', SchemaString(noneOk=True)),
         ('album', SchemaString(noneOk=True)),
         ('album_artist', SchemaString(noneOk=True)),
@@ -501,6 +499,22 @@ class ItemSchema(MultiClassObjectSchema):
             ('item_downloader', ('downloader_id',)),
             ('item_feed_downloader', ('feed_id', 'downloader_id',)),
             ('item_file_type', ('file_type',)),
+    )
+
+class ItemMetadataSchema(DDBObjectSchema):
+    klass = ItemMetadata
+    table_name = 'item_metadata'
+    fields = DDBObjectSchema.fields + [
+        ('item_id', SchemaInt()),
+        ('extractor_priority', SchemaInt()),
+        ('extractor_name', SchemaString()),
+        ('metadata', SchemaDict(SchemaString(), SchemaString(), noneOk=True)),
+        ('has_drm', SchemaBool(noneOk=True)),
+        ('file_type', SchemaInt(noneOk=True)),
+        ('duration', SchemaInt(noneOk=True)),
+    ]
+
+    indexes = (
     )
 
 class FeedSchema(DDBObjectSchema):
@@ -804,8 +818,21 @@ class ViewStateSchema(DDBObjectSchema):
     def handle_malformed_column_widths(value):
         return None
 
+class ItemMetadataStatusSchema(DDBObjectSchema):
+    klass = ItemMetadataStatus
+    table_name = 'item_data_status'
+    fields = DDBObjectSchema.fields + [
+        ('item_id', SchemaInt()),
+        ('best_successful_extractor_priority', SchemaInt(noneOk=True)),
+        ('echonest_examined', SchemaBool()),
+        ('mutagen_examined', SchemaBool()),
+        ('mdp_examined', SchemaBool()),
+    ]
 
-VERSION = 164
+    indexes = (
+    )
+
+VERSION = 165
 
 object_schemas = [
     IconCacheSchema, ItemSchema, FeedSchema,
@@ -817,5 +844,5 @@ object_schemas = [
     PlaylistSchema, HideableTabSchema, ChannelFolderSchema, PlaylistFolderSchema,
     PlaylistItemMapSchema, PlaylistFolderItemMapSchema,
     TabOrderSchema, ThemeHistorySchema, DisplayStateSchema, GlobalStateSchema,
-    DBLogEntrySchema, ViewStateSchema,
+    DBLogEntrySchema, ViewStateSchema, ItemMetadataSchema, ItemMetadataStatusSchema
 ]

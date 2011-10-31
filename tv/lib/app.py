@@ -133,6 +133,9 @@ audio_renderer = None
 # gtk/windows item type sniffer
 get_item_type = None
 
+# manage metadata extraction
+metadata_manager = None
+
 
 # cli frontend adds these
 # -----------------------
