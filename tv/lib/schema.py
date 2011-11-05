@@ -88,7 +88,9 @@ class SchemaItem(object):
 
         if data is None:
             if not self.noneOk:
-                raise ValidationError("None value is not allowed")
+                raise ValidationError(
+                        "None value is not allowed for this %s" %
+                        (self.__class__.__name__,))
         return True
 
     def validateType(self, data, correctType):
@@ -390,7 +392,7 @@ from miro.folder import (HideableTab, ChannelFolder, PlaylistFolder,
 from miro.guide import ChannelGuide
 from miro.item import Item, FileItem
 from miro.iconcache import IconCache
-from miro.metadata import ItemMetadata, ItemMetadataStatus
+from miro.metadata import ItemMetadata, ItemFrontendMetadata, ItemMetadataStatus
 from miro.playlist import SavedPlaylist, PlaylistItemMap
 from miro.tabs import TabOrder
 from miro.theme import ThemeHistory
@@ -506,12 +508,37 @@ class ItemMetadataSchema(DDBObjectSchema):
     table_name = 'item_metadata'
     fields = DDBObjectSchema.fields + [
         ('item_id', SchemaInt()),
-        ('extractor_priority', SchemaInt()),
         ('extractor_name', SchemaString()),
-        ('metadata', SchemaDict(SchemaString(), SchemaString(), noneOk=True)),
+
         ('has_drm', SchemaBool(noneOk=True)),
         ('file_type', SchemaInt(noneOk=True)),
         ('duration', SchemaInt(noneOk=True)),
+    ]
+
+    indexes = (
+    )
+
+class ItemFrontendMetadataSchema(DDBObjectSchema):
+    klass = ItemFrontendMetadata
+    table_name = 'item_frontend_metadata'
+    fields = DDBObjectSchema.fields + [
+        ('item_id', SchemaInt()),
+        ('extractor_priority', SchemaInt()),
+        ('extractor_name', SchemaString()),
+
+        ('title', SchemaString(noneOk=True)),
+        ('description', SchemaString(noneOk=True)),
+        ('album', SchemaString(noneOk=True)),
+        ('artist', SchemaString(noneOk=True)),
+        ('album_artist', SchemaString(noneOk=True)),
+        ('track', SchemaInt(noneOk=True)),
+        ('year', SchemaInt(noneOk=True)),
+        ('genre', SchemaString(noneOk=True)),
+        ('show', SchemaString(noneOk=True)),
+        ('episode_id', SchemaString(noneOk=True)),
+        ('episode_number', SchemaInt(noneOk=True)),
+        ('season_number', SchemaInt(noneOk=True)),
+        ('kind', SchemaString(noneOk=True)),
     ]
 
     indexes = (
@@ -844,5 +871,6 @@ object_schemas = [
     PlaylistSchema, HideableTabSchema, ChannelFolderSchema, PlaylistFolderSchema,
     PlaylistItemMapSchema, PlaylistFolderItemMapSchema,
     TabOrderSchema, ThemeHistorySchema, DisplayStateSchema, GlobalStateSchema,
-    DBLogEntrySchema, ViewStateSchema, ItemMetadataSchema, ItemMetadataStatusSchema
+    DBLogEntrySchema, ViewStateSchema, ItemMetadataSchema,
+    ItemFrontendMetadataSchema, ItemMetadataStatusSchema
 ]

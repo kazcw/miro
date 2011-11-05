@@ -48,10 +48,6 @@ class Source(object):
     """Object with readable metadata properties."""
 
     def get_iteminfo_metadata(self):
-        # until MDP has run, has_drm is very uncertain; by letting it be True in
-        # the backend but False in the frontend while waiting for MDP, we keep
-        # is_playable False but don't show "DRM Locked" until we're sure.
-        has_drm = self.has_drm and self.mdp_state is not None
         return dict(
             name = self.get_title(),
             title_tag = self.title_tag,
@@ -65,39 +61,96 @@ class Source(object):
             genre = self.genre,
             rating = self.rating,
             cover_art = self.cover_art,
-            has_drm = has_drm,
+            has_drm = self.has_drm,
             show = self.show,
             episode_id = self.episode_id,
             episode_number = self.episode_number,
             season_number = self.season_number,
             kind = self.kind,
+            metadata_version = self.metadata_version,
+            mdp_state = self.mdp_state,
+        )
+
+    def get_frontend_data(self):
+        try:
+            data, = ItemFrontendMetadata.info_view(self.id)
+        except ValueError:
+            logging.debug("no info for %s", self.id)
+            return dict(
+                name = u"",
+                description = u"",
+                album = u"",
+                artist = u"",
+                album_artist = u"",
+                track = None,
+                year = None,
+                genre = u"",
+                show = u"",
+                episode_id = u"",
+                episode_number = None,
+                season_number = None,
+                kind = None,
+            )
+        return dict(
+            name = info.title,
+            description = info.description,
+            album = info.album,
+            artist = info.artist,
+            album_artist = info.album_artist,
+            track = info.track,
+            year = info.year,
+            genre = info.genre,
+            show = info.show,
+            episode_id = info.episode_id,
+            episode_number = info.episode_number,
+            season_number = info.season_number,
+            kind = info.kind,
         )
 
     def setup_new(self):
-        self.set_primary_metadata(None)
+        self.reset_primary_metadata()
         self.calc_composite_metadata()
+
+    def reset_primary_metadata(self):
+        self.title = u""
+        self.title_tag = None
+        self.description = u""
+        self.album = None
+        self.album_artist = None
+        self.artist = None
+        self.track = None
+        self.album_tracks = None
+        self.year = None
+        self.genre = None
+        self.rating = None
+        self.cover_art = None
+        self.has_drm = None
+        self.file_type = None
+        self.show = None
+        self.episode_id = None
+        self.episode_number = None
+        self.season_number = None
+        self.kind = None
 
     def set_primary_metadata(self, data=None):
         """Apply the single-source (frontend) data from a given source"""
-        if data is None:
-            data = {}
-        self.title = data.get('title', u"")
-        self.description = data.get('description', u"")
-        self.album = data.get('album', None)
-        self.album_artist = data.get('album_artist', None)
-        self.artist = data.get('artist', None)
-        self.track = data.get('track', None)
-        self.album_tracks = data.get('album_tracks', None)
-        self.year = data.get('year', None)
-        self.genre = data.get('genre', None)
-        self.rating = data.get('rating', None)
-        self.cover_art = data.get('cover_art', None)
-        self.show = data.get('show', None)
-        self.episode_id = data.get('episode_id', None)
-        self.episode_number = data.get('episode_number', None)
-        self.season_number = data.get('season_number', None)
-        self.kind = data.get('kind', None)
-        # TODO: save base data for special properties
+        self.reset_primary_metadata()
+        self.title = data.title
+        self.description = data.description
+        self.album = data.album
+        self.album_artist = data.album_artist
+        self.artist = data.artist
+        self.track = data.track
+        self.album_tracks = data.album_tracks
+        self.year = data.year
+        self.genre = data.genre
+        self.rating = data.rating
+        self.cover_art = data.cover_art
+        self.show = data.show
+        self.episode_id = data.episode_id
+        self.episode_number = data.episode_number
+        self.season_number = data.season_number
+        self.kind = data.kind
         self.signal_change()
 
     def calc_composite_metadata(self):
@@ -107,6 +160,7 @@ class Source(object):
         self.file_type = 'audio'
         self.duration = 100
         self.has_drm = False
+        self.signal_change()
 
     @property
     def media_type_checked(self):
@@ -114,17 +168,6 @@ class Source(object):
         ItemInfo. Provided for compatibility with the previous API.
         """
         return self.file_type is not None
-
-    @returns_unicode
-    def get_title(self):
-        if self.title:
-            return self.title
-        else:
-            return self.title_tag if self.title_tag else u''
-
-    @returns_unicode
-    def get_description(self):
-        return self.description
 
     @returns_filename
     def get_thumbnail(self):
@@ -136,6 +179,10 @@ class Source(object):
 #        elif info['screenshot']:
 #            path = info['screenshot']
 #            return resources.path(fileutil.expand_filename(path))
+
+    @returns_unicode
+    def get_title(self):
+        return self.title
 
 def metadata_setter(attribute, type_=None):
     def set_metadata(self, value, _bulk=False):
@@ -297,19 +344,45 @@ class Extractor(object):
             status.best_successful_extractor_priority = new_best
 
 class ItemMetadata(DDBObject):
-    """Metadata describing one item, from one source"""
-    def setup_new(self, item_id, extractor_priority, extractor_id):
-        # required properties: identify the block
+    """Metadata describing one item, from one source
+
+    Backend-ish stuff that tends to be combined between different
+    providers
+    """
+    def setup_new(self, item_id, extractor_priority, extractor_name):
+        # identify the block
         self.item_id = item_id
         self.extractor_priority = extractor_priority
         self.extractor_name = extractor_name
-        # ``package-deal'' frontend data
-        self.metadata = {}
-        # backend-ish stuff that tends to be combined between different
-        # providers
+        # the data
         self.duration = None
         self.has_drm = None
         self.file_type = None
+
+class ItemFrontendMetadata(DDBObject):
+    """Metadata describing one item, from one source
+
+    Frontend-ish stuff that is not combined with data from other sources
+    """
+    def setup_new(self, item_id, extractor_priority, extractor_id):
+        # identify the block
+        self.item_id = item_id
+        self.extractor_priority = extractor_priority
+        self.extractor_name = extractor_name
+        # the data
+        self.title = None
+        self.description = None
+        self.album = None
+        self.artist = None
+        self.album_artist = None
+        self.track = None
+        self.year = None
+        self.genre = None
+        self.show = None
+        self.episode_id = None
+        self.episode_number = None
+        self.season_number = None
+        self.kind = None
 
     @classmethod
     def info_view(cls, item_id):
@@ -318,7 +391,7 @@ class ItemMetadata(DDBObject):
         """
         return cls.make_view(
                 "item_id=?", values=(item_id,),
-                order_by='provider_rank', limit='1')
+                order_by='extractor_priority', limit='1')
 
 class MetadataManager(object):
     def __init__(self):
