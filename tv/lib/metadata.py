@@ -41,6 +41,7 @@ from miro.util import returns_unicode, returns_filename
 from miro import coverart
 from miro import filetypes
 from miro import app
+from miro.plat import resources
 from miro.database import DDBObject
 from miro.plat.utils import thread_body
 
@@ -171,7 +172,7 @@ class Source(object):
     def get_thumbnail(self):
         # XXX TODO: probably just make thumbnail a metadata property
         info = self.get_iteminfo_metadata()
-        if 'cover_art' in info:
+        if info.get('cover_art', None) is not None:
             path = info['cover_art']
             return resources.path(fileutil.expand_filename(path))
 #        elif info['screenshot']:
