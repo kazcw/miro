@@ -67,8 +67,6 @@ class Source(object):
             episode_number = self.episode_number,
             season_number = self.season_number,
             kind = self.kind,
-            metadata_version = self.metadata_version,
-            mdp_state = self.mdp_state,
         )
 
     def get_frontend_data(self):
@@ -218,8 +216,6 @@ class Store(Source):
     set_episode_number = metadata_setter('episode_number', int)
     set_season_number = metadata_setter('season_number', int)
     set_kind = metadata_setter('kind', unicode)
-    set_metadata_version = metadata_setter('metadata_version', int)
-    set_mdp_state = metadata_setter('mdp_state', int)
 
     def set_cover_art(self, new_file, _bulk=False):
         """Set new cover art. Deletes any old cover art.
@@ -293,8 +289,6 @@ class Store(Source):
         episode_number = set_episode_number,
         season_number = set_season_number,
         kind = set_kind,
-        metadata_version = set_metadata_version,
-        mdp_state = set_mdp_state,
     )
 
 class ItemMetadataStatus(DDBObject):
