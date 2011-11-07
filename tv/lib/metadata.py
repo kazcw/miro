@@ -156,7 +156,7 @@ class Source(object):
         # set duration
         # set filetype
         # set has_drm
-        self.file_type = 'audio'
+        self.file_type = u'audio'
         self.duration = 100
         self.has_drm = False
         self.signal_change()
